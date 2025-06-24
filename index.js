@@ -10,39 +10,6 @@ const pool = new Pool({
   connectionString: "postgresql://neondb_owner:npg_wk7Rez8amVGT@ep-proud-moon-a8323qx7-pooler.eastus2.azure.neon.tech/neondb?sslmode=require",
 });
 
-// Create tables if they don't exist
-const createTables = async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id SERIAL PRIMARY KEY,
-        session_id TEXT,
-        phone_number TEXT,
-        lang VARCHAR(10),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS bmi_records (
-        id SERIAL PRIMARY KEY,
-        session_id TEXT REFERENCES sessions(session_id),
-        age INTEGER,
-        weight REAL,
-        height_cm REAL,
-        bmi REAL,
-        status TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    console.log("✅ Tables are ready");
-  } catch (err) {
-    console.error("❌ Error creating tables:", err);
-  }
-};
-createTables();
-
 // USSD logic
 app.post("/ussd", async (req, res) => {
   const { sessionId, phoneNumber, text } = req.body;
@@ -58,7 +25,6 @@ app.post("/ussd", async (req, res) => {
 1. English
 2. Kinyarwanda`;
     } else if (level === 1) {
-      // Save session
       const language = lang === "1" ? "English" : lang === "2" ? "Kinyarwanda" : null;
       if (!language) {
         response = "END Invalid language.";
@@ -93,7 +59,6 @@ app.post("/ussd", async (req, res) => {
       else if (bmi < 30) status = lang === "1" ? "Overweight" : "Ufite ibiro birenze bisanzwe.";
       else status = lang === "1" ? "Obese" : "Ufite umubyibuho ukabije.";
 
-      // Save BMI record
       await pool.query(
         "INSERT INTO bmi_records (session_id, age, weight, height_cm, bmi, status) VALUES ($1, $2, $3, $4, $5, $6)",
         [sessionId, age, weight, heightCm, bmiRounded, status]

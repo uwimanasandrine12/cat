@@ -1,134 +1,147 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const { Pool } = require("pg");
-const app = express();
 
+const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// PostgreSQL Connection
+// PostgreSQL connection
 const pool = new Pool({
-  connectionString: "postgresql://neondb_owner:npg_wk7Rez8amVGT@ep-proud-moon-a8323qx7-pooler.eastus2.azure.neon.tech/neondb?sslmode=require"
+  connectionString: "postgresql://neondb_owner:npg_wk7Rez8amVGT@ep-proud-moon-a8323qx7-pooler.eastus2.azure.neon.tech/neondb?sslmode=require",
 });
 
-// Create Tables
+// Create tables if they don't exist
 const createTables = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id SERIAL PRIMARY KEY,
-      session_id TEXT,
-      phone_number TEXT,
-      lang VARCHAR(10),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS bmi_records (
-      id SERIAL PRIMARY KEY,
-      session_id TEXT REFERENCES sessions(session_id),
-      age INTEGER,
-      weight REAL,
-      height_cm REAL,
-      bmi REAL,
-      status TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-};
-createTables().catch(console.error);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id SERIAL PRIMARY KEY,
+        session_id TEXT,
+        phone_number TEXT,
+        lang VARCHAR(10),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bmi_records (
+        id SERIAL PRIMARY KEY,
+        session_id TEXT REFERENCES sessions(session_id),
+        age INTEGER,
+        weight REAL,
+        height_cm REAL,
+        bmi REAL,
+        status TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    console.log("✅ Tables are ready");
+  } catch (err) {
+    console.error("❌ Error creating tables:", err);
+  }
+};
+createTables();
+
+// USSD logic
 app.post("/ussd", async (req, res) => {
   const { sessionId, phoneNumber, text } = req.body;
   const inputs = text.split("*");
   const level = inputs.length;
   let response = "";
 
-  const lang = inputs[0];
+  const lang = inputs[0]; // Language selection
 
-  if (text === "") {
-    response = `CON Welcome to BMI Calculator / Murakaza neza
+  try {
+    if (text === "") {
+      response = `CON Welcome to BMI Calculator / Murakaza neza
 1. English
 2. Kinyarwanda`;
-  } else if (level === 1) {
-    // Insert session at language selection
-    const language = lang === "1" ? "English" : lang === "2" ? "Kinyarwanda" : "Unknown";
-    if (language === "Unknown") {
-      response = "END Invalid language.";
-    } else {
-      await pool.query(
-        "INSERT INTO sessions (session_id, phone_number, lang) VALUES ($1, $2, $3)",
-        [sessionId, phoneNumber, language]
-      );
+    } else if (level === 1) {
+      // Save session
+      const language = lang === "1" ? "English" : lang === "2" ? "Kinyarwanda" : null;
+      if (!language) {
+        response = "END Invalid language.";
+      } else {
+        await pool.query(
+          "INSERT INTO sessions (session_id, phone_number, lang) VALUES ($1, $2, $3)",
+          [sessionId, phoneNumber, language]
+        );
+        response = lang === "1"
+          ? "CON Enter your age:"
+          : "CON Andika imyaka yawe:";
+      }
+    } else if (level === 2) {
       response = lang === "1"
-        ? "CON Enter your age:"
-        : "CON Andika imyaka yawe:";
-    }
-  } else if (level === 2) {
-    response = lang === "1"
-      ? "CON Enter your weight in KG:"
-      : "CON Andika ibiro byawe mu kilo (KG):";
-  } else if (level === 3) {
-    response = lang === "1"
-      ? "CON Enter your height in CM:"
-      : "CON Andika uburebure bwawe mu centimetero (CM):";
-  } else if (level === 4) {
-    const age = parseInt(inputs[1]);
-    const weight = parseFloat(inputs[2]);
-    const heightCm = parseFloat(inputs[3]);
-    const heightM = heightCm / 100;
-    const bmi = weight / (heightM * heightM);
-    const bmiRounded = parseFloat(bmi.toFixed(1));
+        ? "CON Enter your weight in KG:"
+        : "CON Andika ibiro byawe mu kilo (KG):";
+    } else if (level === 3) {
+      response = lang === "1"
+        ? "CON Enter your height in CM:"
+        : "CON Andika uburebure bwawe mu centimetero (CM):";
+    } else if (level === 4) {
+      const age = parseInt(inputs[1]);
+      const weight = parseFloat(inputs[2]);
+      const heightCm = parseFloat(inputs[3]);
+      const heightM = heightCm / 100;
+      const bmi = weight / (heightM * heightM);
+      const bmiRounded = parseFloat(bmi.toFixed(1));
 
-    let status = "";
-    if (bmi < 18.5) status = lang === "1" ? "Underweight" : "Ufite ibiro biri hasi cyane.";
-    else if (bmi < 25) status = lang === "1" ? "Normal weight" : "Ufite ibiro bisanzwe.";
-    else if (bmi < 30) status = lang === "1" ? "Overweight" : "Ufite ibiro birenze bisanzwe.";
-    else status = lang === "1" ? "Obese" : "Ufite umubyibuho ukabije.";
+      let status = "";
+      if (bmi < 18.5) status = lang === "1" ? "Underweight" : "Ufite ibiro biri hasi cyane.";
+      else if (bmi < 25) status = lang === "1" ? "Normal weight" : "Ufite ibiro bisanzwe.";
+      else if (bmi < 30) status = lang === "1" ? "Overweight" : "Ufite ibiro birenze bisanzwe.";
+      else status = lang === "1" ? "Obese" : "Ufite umubyibuho ukabije.";
 
-    // Save BMI Record
-    try {
+      // Save BMI record
       await pool.query(
         "INSERT INTO bmi_records (session_id, age, weight, height_cm, bmi, status) VALUES ($1, $2, $3, $4, $5, $6)",
         [sessionId, age, weight, heightCm, bmiRounded, status]
       );
-    } catch (err) {
-      console.error("Error saving BMI:", err);
-    }
 
-    response = lang === "1"
-      ? `CON Your BMI is ${bmiRounded} (${status})
+      response = lang === "1"
+        ? `CON Your BMI is ${bmiRounded} (${status})
 Would you like health tips?
 1. Yes
 2. No`
-      : `CON BMI yawe ni ${bmiRounded} (${status})
+        : `CON BMI yawe ni ${bmiRounded} (${status})
 Ukeneye inama z’ubuzima?
 1. Yego
 2. Oya`;
-  } else if (level === 5) {
-    const choice = inputs[4];
-    if (choice === "1") {
-      response = lang === "1"
-        ? `END Health Tips:
+    } else if (level === 5) {
+      const choice = inputs[4];
+      if (choice === "1") {
+        response = lang === "1"
+          ? `END Health Tips:
 - Eat fruits and vegetables
 - Drink water regularly
 - Avoid fast food and sugar`
-        : `END Inama z'ubuzima:
+          : `END Inama z'ubuzima:
 - Rya imbuto n’imboga
 - Nywa amazi kenshi
 - Irinde ibiryo bya vuba na isukari nyinshi`;
-    } else if (choice === "2") {
-      response = lang === "1"
-        ? "END Thank you. Stay healthy!"
-        : "END Murakoze. Mugire ubuzima bwiza!";
+      } else if (choice === "2") {
+        response = lang === "1"
+          ? "END Thank you. Stay healthy!"
+          : "END Murakoze. Mugire ubuzima bwiza!";
+      } else {
+        response = "END Invalid option.";
+      }
     } else {
-      response = "END Invalid option.";
+      response = "END Session ended or invalid input.";
     }
-  } else {
-    response = "END Session ended or invalid input.";
-  }
 
-  res.set("Content-Type", "text/plain");
-  res.send(response);
+    res.set("Content-Type", "text/plain");
+    res.send(response);
+  } catch (err) {
+    console.error("❌ Error handling USSD request:", err);
+    res.set("Content-Type", "text/plain");
+    res.send("END Something went wrong. Please try again later.");
+  }
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("BMI USSD app running on port " + PORT));
+app.listen(PORT, () => {
+  console.log(`✅ BMI USSD app running on port ${PORT}`);
+});
